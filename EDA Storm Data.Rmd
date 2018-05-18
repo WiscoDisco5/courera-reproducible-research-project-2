@@ -1,0 +1,151 @@
+---
+title: 'Reproducible Research: Course Project 2'
+author: "John Goodwin"
+date: "May 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Processing
+
+Start by loading required packages.
+
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+Then download and read in the storm data.
+
+
+```{r}
+if(!file.exists("StormData.csv.bz2")) {
+  download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", destfile = "StormData.csv.bz2")
+}
+
+storm <- read_csv("StormData.csv.bz2")
+```
+Let's clean up the the date and time fields and place them in one field.
+
+```{r}
+storm <- storm %>% 
+  mutate(BGN_TIME = gsub('^([0-9]{2})([0-9]+)$', '\\1:\\2', BGN_TIME),
+         BGN_DATE = gsub(" .*", "",BGN_DATE),
+         BGN_DATETIME = paste(BGN_DATE, BGN_TIME),
+         BGN_DATETIME1 = parse_date_time(BGN_DATETIME, "%m/%d/%Y %H:%M:%S %p"),
+         BGN_DATETIME2 = parse_date_time(BGN_DATETIME, "%m/%d/%Y %H:%M"),
+         BGN_DATETIME = coalesce(BGN_DATETIME1, BGN_DATETIME2)) %>%
+  select(-BGN_DATETIME1, -BGN_DATETIME2)
+  
+```
+
+It looks like some dates/times aren't parsing properly.
+
+```{r}
+storm %>% filter(is.na(BGN_DATETIME)) %>% 
+  select(BGN_DATE, BGN_TIME, BGN_DATETIME)
+```
+
+Looks like some times weren't entered properly. To avoid making edits to individual rows, these will just be left as is.  
+
+Now let's clean up the damage costs fields.
+
+```{r}
+storm <- storm %>% 
+  mutate(PROPDMG_factor = recode(PROPDMGEXP,
+                                 K = 1000, 
+                                 M = 1000000, 
+                                 B = 1000000000, 
+                                 .default = 0, 
+                                 .missing = 0),
+         CROPDMG_facotr = recode(CROPDMGEXP,
+                                 K = 1000, 
+                                 M = 1000000, 
+                                 B = 1000000000, 
+                                 .default = 0, 
+                                 .missing = 0),
+         PROPDMG = PROPDMG * PROPDMG_factor,
+         CROPDMG = CROPDMG * CROPDMG_facotr) 
+```
+
+-bring old damages to current using?
+-time??
+-event description word frequencies by quartile of damages
+-map
+
+
+##pop investigation
+
+```{r}
+library(tidytext)
+library(topicmodels)
+library(widyr)
+#library(tm)
+
+event_desc_dtm <- storm %>% filter(!is.na(REMARKS)) %>%
+  select(REFNUM, REMARKS) %>%
+  unnest_tokens(word, REMARKS) %>% # breaks up remarks into key words (lowercase, removes punctuation)
+  anti_join(stop_words) %>%   # removes boring words like "the"
+  filter(!word %in% c("narrative", "county"), !is.na(word)) %>% # remove some words that are boring to this analysis
+  count(REFNUM, word) %>%  # aggregate into counts
+  filter(!grepl("[0-9]",word)) %>% # remove numbers
+  cast_dtm(REFNUM,word,n)
+
+
+event_desc_lda <- LDA(event_desc_dtm, k = 2, control = list(seed = 451))
+
+
+event_desc_cor <- storm %>% filter(!is.na(REMARKS)) %>%
+  select(REFNUM, REMARKS) %>%
+  unnest_tokens(word, REMARKS) %>% # breaks up remarks into key words (lowercase, removes punctuation)
+  anti_join(stop_words) %>%   # removes boring words like "the"
+  filter(!word %in% c("narrative", "county"), !is.na(word)) %>% # remove some words that are boring to this analysis
+  filter(!grepl("[0-9]",word)) %>%
+  group_by(word) %>%
+  filter(n() > 100) %>%
+  pairwise_cor(word, REFNUM, sort = TRUE)
+
+```
+
+
+```{r}
+event_desc <- storm %>% filter(!is.na(REMARKS)) %>%
+  select(REFNUM, REMARKS) %>%
+  unnest_tokens(word, REMARKS) %>% # breaks up remarks into key words (lowercase, removes punctuation)
+  anti_join(stop_words) %>%   # removes boring words like "the"
+  filter(!word %in% c("narrative", "county"), !is.na(word)) %>% # remove some words that are boring to this analysis
+  count(REFNUM, word) %>%  # aggregate into counts
+  filter(!grepl("[0-9]",word))
+
+event_desc <- left_join(event_desc, select(storm, REFNUM, PROPDMG), by = "REFNUM")
+
+event_desc %>% group_by(word) %>% summarise(cnt = sum(n), mean_dmg = mean(PROPDMG)) %>% filter(cnt > 1000) %>%
+  arrange(desc(mean_dmg)) %>% View
+
+```
+
+```{r}
+summarised_storm <- storm %>% group_by(EVTYPE) %>% 
+  select(EVTYPE, BGN_RANGE, END_RANGE, LENGTH, WIDTH, MAG, FATALITIES, INJURIES, PROPDMG, CROPDMG) %>%
+  summarise_all(mean, na.rm = TRUE) %>% as.data.frame
+
+
+row.names(summarised_storm) <- summarised_storm$EVTYPE
+summarised_storm$EVTYPE <- NULL
+
+euc_dist <- dist(summarised_storm)
+clustered_events <- hclust(euc_dist)
+
+summarised_storm$cluster <- cutree(clustered_events,k = 10)
+View(cutree(hclust(euc_dist,method = ),k = 5))
+summarised_storm %>% tibble %>%
+  plot()
+?hclust
+plot(hclust)
+?mutate_at
+?select_vars
+```
+
