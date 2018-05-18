@@ -68,14 +68,14 @@ event_desc <- storm %>% filter(!is.na(REMARKS)) %>%
 quantile(event_desc$cnt)
   
 
-event_desc <- storm %>% filter(!is.na(REMARKS)) %>%
+event_desc_dtm <- storm %>% filter(!is.na(REMARKS)) %>%
   select(REFNUM, REMARKS) %>%
   unnest_tokens(word, REMARKS) %>%
   anti_join(stop_words) %>% 
   filter(!word %in% c("narrative", "county"), !is.na(word)) %>%
-  count(REFNUM, word)
-
-event_desc_dtm <- event_desc %>% filter(!grepl("[0-9]",word)) %>% cast_dtm(REFNUM,word,n)
+  count(REFNUM, word) %>% 
+  filter(!grepl("[0-9]",word)) %>% 
+  cast_dtm(REFNUM,word,n)
 
 library(topicmodels)
 
