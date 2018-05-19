@@ -16,6 +16,7 @@ Start by loading required packages.
 ```{r}
 library(tidyverse)
 library(lubridate)
+
 ```
 
 Then download and read in the storm data.
@@ -51,7 +52,7 @@ storm %>% filter(is.na(BGN_DATETIME)) %>%
 
 Looks like some times weren't entered properly. To avoid making edits to individual rows, these will just be left as is.  
 
-Now let's clean up the damage costs fields.
+Now let's clean up the damage costs fields. It looks like the true severity of an event is contained in two columns where field gives the magnitude of the damage (thousands, millions, and billions) and the other gives 3 significant digits. This code combines this information into one field.
 
 ```{r}
 storm <- storm %>% 
@@ -68,84 +69,107 @@ storm <- storm %>%
                                  .default = 0, 
                                  .missing = 0),
          PROPDMG = PROPDMG * PROPDMG_factor,
-         CROPDMG = CROPDMG * CROPDMG_facotr) 
+         CROPDMG = CROPDMG * CROPDMG_facotr) %>%
+  select(-CROPDMG_facotr, -PROPDMG_factor)
 ```
 
--bring old damages to current using?
--time??
--event description word frequencies by quartile of damages
--map
+Finally, it looks like we are dealing with some data that is spread out over a long period of time. It might be a good idea to add an adjustment for inflation. That way old events do not appear less severe just because they're old. The blscrapeR package will give us an inflation factor to apply by year.
+
+```{r}
+library(blscrapeR)
+
+inflation <- inflation_adjust(2018) %>% select(year, adj_value) %>% mutate(year = as.numeric(year))
+
+storm <- storm %>% 
+  mutate(year = year(BGN_DATETIME)) %>% 
+  left_join(inflation, by = "year")  %>%
+  mutate(PROPDMG_adj = PROPDMG / adj_value,
+         CROPDMG_adj = CROPDMG / adj_value)
 
 
-##pop investigation
+storm %>% group_by(year) %>% summarise(prop = mean(PROPDMG),
+                                       prop_adj = mean(PROPDMG_adj)) %>%
+  gather(adj, sev, -year) %>%
+  ggplot(aes(year, sev, color=adj, group = adj)) +
+  geom_line()
+
+
+```
+
+
+##Public Health and Weather
+
+What types of weather events have harmful impacts on population health? To begin to answer this questions we have to do a better job of sorting events. Look at the top ten most frequent events:
+
+```{r}
+storm %>% group_by(EVTYPE) %>% 
+  summarise(Frequency = n()/nrow(.)) %>% 
+  arrange(desc(Frequency)) %>% top_n(20) %>%
+  knitr::kable(.,format = "html")
+```
+
+Note the similarities between some of the fields: wind, flood, thunderstorm, winter, etc.. I am going to try to reduce some of the redundancies using techniques used for text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)).
 
 ```{r}
 library(tidytext)
-library(topicmodels)
-library(widyr)
-#library(tm)
 
-event_desc_dtm <- storm %>% filter(!is.na(REMARKS)) %>%
-  select(REFNUM, REMARKS) %>%
-  unnest_tokens(word, REMARKS) %>% # breaks up remarks into key words (lowercase, removes punctuation)
-  anti_join(stop_words) %>%   # removes boring words like "the"
-  filter(!word %in% c("narrative", "county"), !is.na(word)) %>% # remove some words that are boring to this analysis
-  count(REFNUM, word) %>%  # aggregate into counts
-  filter(!grepl("[0-9]",word)) %>% # remove numbers
-  cast_dtm(REFNUM,word,n)
+tokens <- storm %>% select(REFNUM, EVTYPE, PROPDMG, CROPDMG, INJURIES, FATALITIES) %>%
+  unnest_tokens(event_words, EVTYPE) %>% 
+  group_by(event_words) %>%
+  mutate(count = n()) %>% ##doing what i expect?
+  filter(count > 50) %>% 
+  ungroup
+
+##cluster
+tokens_summarised <- tokens %>% group_by(event_words) %>% select(-REFNUM, -count) %>%
+  summarise_all(mean) %>% 
+  as.data.frame
+
+names <- tokens_summarised$event_words
+tokens_summarised$event_words <- NULL
+
+logger <- function(x) {if_else(x > 0, log(x), 0)}
+tokens_summarised <- apply(tokens_summarised,2, logger)
+row.names(tokens_summarised) <- names
 
 
-event_desc_lda <- LDA(event_desc_dtm, k = 2, control = list(seed = 451))
+tokens_cluster <- tokens_summarised %>% dist %>% hclust
+plot(tokens_cluster)
 
+x<-cutree(tokens_cluster,8)
 
-event_desc_cor <- storm %>% filter(!is.na(REMARKS)) %>%
-  select(REFNUM, REMARKS) %>%
-  unnest_tokens(word, REMARKS) %>% # breaks up remarks into key words (lowercase, removes punctuation)
-  anti_join(stop_words) %>%   # removes boring words like "the"
-  filter(!word %in% c("narrative", "county"), !is.na(word)) %>% # remove some words that are boring to this analysis
-  filter(!grepl("[0-9]",word)) %>%
-  group_by(word) %>%
-  filter(n() > 100) %>%
-  pairwise_cor(word, REFNUM, sort = TRUE)
+severity_by_cluster <- function(k) {
+  x <- cutree(tokens_cluster, k) 
+  word_to_clust <- bind_cols(event_words = names(x), cluster = x)
+  
+  raw_results <- tokens %>% 
+    select(REFNUM, event_words, PROPDMG, CROPDMG, INJURIES, FATALITIES) %>% 
+    left_join(word_to_clust, by = "event_words")  %>%
+    group_by(cluster) %>%
+    select(cluster,PROPDMG, CROPDMG, INJURIES, FATALITIES) %>%
+    summarise_all(mean)
+  
+  list(word_to_clust, raw_results)
+
+}
+
+clusters <- severity_by_cluster(8)
+top_prop <- clusters[[2]] %>% arrange(desc(PROPDMG)) %>% .[1,]
+clusters[[1]] %>% filter(cluster == top_prop$cluster)
 
 ```
 
 
-```{r}
-event_desc <- storm %>% filter(!is.na(REMARKS)) %>%
-  select(REFNUM, REMARKS) %>%
-  unnest_tokens(word, REMARKS) %>% # breaks up remarks into key words (lowercase, removes punctuation)
-  anti_join(stop_words) %>%   # removes boring words like "the"
-  filter(!word %in% c("narrative", "county"), !is.na(word)) %>% # remove some words that are boring to this analysis
-  count(REFNUM, word) %>%  # aggregate into counts
-  filter(!grepl("[0-9]",word))
-
-event_desc <- left_join(event_desc, select(storm, REFNUM, PROPDMG), by = "REFNUM")
-
-event_desc %>% group_by(word) %>% summarise(cnt = sum(n), mean_dmg = mean(PROPDMG)) %>% filter(cnt > 1000) %>%
-  arrange(desc(mean_dmg)) %>% View
-
-```
-
-```{r}
-summarised_storm <- storm %>% group_by(EVTYPE) %>% 
-  select(EVTYPE, BGN_RANGE, END_RANGE, LENGTH, WIDTH, MAG, FATALITIES, INJURIES, PROPDMG, CROPDMG) %>%
-  summarise_all(mean, na.rm = TRUE) %>% as.data.frame
 
 
-row.names(summarised_storm) <- summarised_storm$EVTYPE
-summarised_storm$EVTYPE <- NULL
+--cluster econ
+--cluster pop health
+--add anyhting else to these--lat long?
 
-euc_dist <- dist(summarised_storm)
-clustered_events <- hclust(euc_dist)
+--mapping for concentrated losses?
 
-summarised_storm$cluster <- cutree(clustered_events,k = 10)
-View(cutree(hclust(euc_dist,method = ),k = 5))
-summarised_storm %>% tibble %>%
-  plot()
-?hclust
-plot(hclust)
-?mutate_at
-?select_vars
-```
+
+
+
+
 
