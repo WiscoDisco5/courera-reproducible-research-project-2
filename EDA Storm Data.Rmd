@@ -108,14 +108,38 @@ storm %>% group_by(EVTYPE) %>%
   knitr::kable(.,format = "html")
 ```
 
-Note the similarities between some of the fields: wind, flood, thunderstorm, winter, etc.. I am going to try to reduce some of the redundancies using techniques used for text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)).
+Note the similarities between some of the fields (hign wind vs. strong wind, etc.). I am going to try to reduce some of these redundancies using techniques used for text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)). Basically, I am going to split up character strings like "HIGH WIND" to "HIGH" and "WIND". After that I am going to
 
 ```{r}
 library(tidytext)
+library(stringr)
+library(SnowballC)
 
-tokens <- storm %>% select(REFNUM, EVTYPE, PROPDMG, CROPDMG, INJURIES, FATALITIES) %>%
-  unnest_tokens(event_words, EVTYPE) %>% 
-  group_by(event_words) %>%
+#, PROPDMG, CROPDMG, INJURIES, FATALITIES
+
+tokens <- storm %>% select(REFNUM, EVTYPE) %>%
+  unnest_tokens(event_words, EVTYPE) %>%
+  mutate(event_words = wordStem(event_words),
+         event_words = str_replace_all(event_words, "[:punct:]", " ")) %>%
+  unique # this removes any words that appear twice in a EVTYPE
+
+```
+And what are the most frequent words now?
+
+```{r}
+obs <- nrow(storm)
+
+tokens %>% group_by(event_words) %>% summarise(Frequency =n()/obs) %>%
+  arrange(desc(Frequency)) 
+```
+
+
+```{r}
+
+
+
+%>%
+  group_by(event_words) %>%                         
   mutate(count = n()) %>% ##doing what i expect?
   filter(count > 50) %>% 
   ungroup
