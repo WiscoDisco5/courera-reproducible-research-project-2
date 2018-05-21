@@ -108,58 +108,76 @@ storm %>% group_by(EVTYPE) %>%
   knitr::kable(.,format = "html")
 ```
 
-Note the similarities between some of the fields (hign wind vs. strong wind, etc.). I am going to try to reduce some of these redundancies using techniques used for text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)). Basically, I am going to split up character strings like "HIGH WIND" to "HIGH" and "WIND". After that I am going to
+Note the similarities between some of the fields (hign wind vs. strong wind, etc.). I am going to try to reduce some of these redundancies using some functions used for text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)). Basically, I am going to split up character strings like "HIGH WIND" to "HIGH" and "WIND". Afterwards, I am going to use the function `SnowballC::wordStem` to "stem" words. This means changing words like "WINDS"" to "WIND". 
 
 ```{r}
 library(tidytext)
 library(stringr)
 library(SnowballC)
 
-#, PROPDMG, CROPDMG, INJURIES, FATALITIES
-
 tokens <- storm %>% select(REFNUM, EVTYPE) %>%
+  mutate(EVTYPE = str_replace_all(EVTYPE, "[0-9]", " "),
+         EVTYPE = str_replace_all(EVTYPE, "[:punct:]", " ")) %>%
   unnest_tokens(event_words, EVTYPE) %>%
-  mutate(event_words = wordStem(event_words),
-         event_words = str_replace_all(event_words, "[:punct:]", " ")) %>%
+  mutate(event_words = str_replace_all(event_words, " ", ""),
+         event_words = wordStem(event_words)) %>%
   unique # this removes any words that appear twice in a EVTYPE
 
 ```
+
 And what are the most frequent words now?
 
 ```{r}
 obs <- nrow(storm)
 
 tokens %>% group_by(event_words) %>% summarise(Frequency =n()/obs) %>%
-  arrange(desc(Frequency)) 
+  arrange(desc(Frequency)) %>% top_n(20) %>%
+  knitr::kable(.,format = "html")
+```
+
+Note the stemming algorithm does seem to make for some funky looking words. Notice the word "lightn" is likely the stemmed version of "lightning". 
+
+Now that we have a simpler set of strings representing each event, let's try clustering the events into similar groups. While a more thorough analysis would attempt to use the full dataset to cluster the events, I am going to cluster the events based on summarised results to speed things up. Since the clusters are going to be based on summarised results, I am only going to use words that appear more than 50 times to ensure credibility.
+
+```{r, fig.height=7}
+## reattach storm data and summarise
+storm_sub <- storm %>%
+  select(REFNUM,
+         PROPDMG,
+         CROPDMG,
+         FATALITIES,
+         INJURIES)
+
+tokens_summarised <- tokens %>%
+  left_join(storm_sub, by = "REFNUM") %>%
+  select(-REFNUM) %>%
+  group_by(event_words) %>%                         
+  mutate(count = n()) %>% ##doing what i expect?
+  summarise_all(mean) %>%
+  filter(count > 50) %>% 
+  select(-count) %>%
+  ungroup %>% 
+  as.data.frame
+
+## make into matrix and take (log(x+.01))
+names <- tokens_summarised$event_words
+tokens_summarised$event_words <- NULL
+
+logger <- function(x) {log(x+.01)} ##adding 0.01 for the 0's
+tokens_summarised <- apply(tokens_summarised, 2, logger)
+row.names(tokens_summarised) <- names
+
+##cluster using hierarchical clustering!
+tokens_cluster <- tokens_summarised %>% dist %>% hclust
+
+##plot
+plot(as.dendrogram(tokens_cluster), hang = -1, horiz = TRUE)
+
+
 ```
 
 
 ```{r}
-
-
-
-%>%
-  group_by(event_words) %>%                         
-  mutate(count = n()) %>% ##doing what i expect?
-  filter(count > 50) %>% 
-  ungroup
-
-##cluster
-tokens_summarised <- tokens %>% group_by(event_words) %>% select(-REFNUM, -count) %>%
-  summarise_all(mean) %>% 
-  as.data.frame
-
-names <- tokens_summarised$event_words
-tokens_summarised$event_words <- NULL
-
-logger <- function(x) {if_else(x > 0, log(x), 0)}
-tokens_summarised <- apply(tokens_summarised,2, logger)
-row.names(tokens_summarised) <- names
-
-
-tokens_cluster <- tokens_summarised %>% dist %>% hclust
-plot(tokens_cluster)
-
 x<-cutree(tokens_cluster,8)
 
 severity_by_cluster <- function(k) {
@@ -181,9 +199,9 @@ clusters <- severity_by_cluster(8)
 top_prop <- clusters[[2]] %>% arrange(desc(PROPDMG)) %>% .[1,]
 clusters[[1]] %>% filter(cluster == top_prop$cluster)
 
+?plot.hclust
+
 ```
-
-
 
 
 --cluster econ
