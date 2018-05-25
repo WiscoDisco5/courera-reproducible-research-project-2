@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE)
 ```
 
 # Data Processing
@@ -18,8 +18,9 @@ library(tidyverse)
 library(lubridate)
 ```
 
-Then download and read in the storm data.
+##Read in Storm Data  
 
+Then download and read in the storm data if it isnt in your working directory.
 
 ```{r}
 if(!file.exists("StormData.csv.bz2")) {
@@ -29,7 +30,9 @@ if(!file.exists("StormData.csv.bz2")) {
 storm <- read_csv("StormData.csv.bz2")
 ```
 
-Let's clean up the the date and time fields and place them in one field.
+##Clean Date and Time Fields
+
+The date and time fields should be combined into one, tidy datetime field. This manipulation is actually not going to be used in the final analysis, but hey, [that way you have it](https://www.youtube.com/watch?v=dL8UXQ6BIrc).
 
 ```{r}
 storm <- storm %>% 
@@ -43,7 +46,7 @@ storm <- storm %>%
   
 ```
 
-It looks like some dates/times aren't parsing properly.
+It looks like some dates/times still aren't parsing properly.
 
 ```{r}
 storm %>% filter(is.na(BGN_DATETIME)) %>% 
@@ -51,6 +54,8 @@ storm %>% filter(is.na(BGN_DATETIME)) %>%
 ```
 
 Looks like some times weren't entered properly. To avoid making edits to individual rows, these will just be left as is.  
+
+##Clean Cost Fields
   
 The damage costs fields need to be cleaned. It looks like the true severity of an event is contained in two columns where one field gives the magnitude of the damage (thousands, millions, and billions) and the other gives 3 significant digits. This code combines this information into one field.
 
@@ -73,8 +78,8 @@ storm <- storm %>%
   select(-CROPDMG_facotr, -PROPDMG_factor)
 ```
 
-## Clustering Events
-Before we can study which events have the most economic and health consequences, it is worth taking a second to review what sorts of events fall within the EVTYPE field. Look at the top ten most frequent events:
+#Clustering Events
+Before we can study which events have the worst economic and health consequences, it is worth attempting to group the event types (in the EVTYPE field) into clusters. There are `r length(unique(storm$EVTYPE))` unique events in this dataset, so it will be better to aggregate these events a bit. To start, look at the top ten most frequent events in the EVTYPE field:
 
 ```{r}
 storm %>% group_by(EVTYPE) %>% 
@@ -83,7 +88,7 @@ storm %>% group_by(EVTYPE) %>%
   knitr::kable(.,format = "html")
 ```
 
-Note the similarities between some of the fields (hign wind vs. strong wind, etc.). I am going to try to reduce some of these redundancies using some functions used for text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)). Basically, I am going to split up character strings like "HIGH WIND" to "HIGH" and "WIND". Afterwards, I am going to use the function `SnowballC::wordStem` to "stem" words. This means changing words like "WINDS"" to "WIND". 
+Note the similarities between some of the fields (hign wind vs. strong wind, etc.). I am going to try to reduce some of these redundancies using some functions that can be used for processing data in text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)). Basically, I am going to split up character strings like "HIGH WIND" to "HIGH" and "WIND". Afterwards, I am going to use the function `SnowballC::wordStem` to "stem" words. This means changing words like "WINDS" to "WIND". These manipulations should help reduce redundancies in the EVTYPE field.  
 
 ```{r}
 library(tidytext)
@@ -91,12 +96,12 @@ library(stringr)
 library(SnowballC)
 
 tokens <- storm %>% select(REFNUM, EVTYPE) %>%
-  mutate(EVTYPE = str_replace_all(EVTYPE, "[0-9]", " "),
-         EVTYPE = str_replace_all(EVTYPE, "[:punct:]", " ")) %>%
-  unnest_tokens(event_words, EVTYPE) %>%
-  mutate(event_words = str_replace_all(event_words, " ", ""),
-         event_words = wordStem(event_words)) %>%
-  unique # this removes any words that appear twice in a EVTYPE
+  mutate(EVTYPE = str_replace_all(EVTYPE, "[0-9]", " "),           #remove numbers 
+         EVTYPE = str_replace_all(EVTYPE, "[:punct:]", " ")) %>%   #remove punctuation
+  unnest_tokens(event_words, EVTYPE) %>%                           #seperate multi word strings
+  mutate(event_words = str_replace_all(event_words, " ", ""),      #remove leftover spaces
+         event_words = wordStem(event_words)) %>%                  #stem words like winds to wind
+  unique                                                           #prevent dups
 
 ```
 
@@ -127,14 +132,14 @@ tokens_summarised <- tokens %>%
   left_join(storm_sub, by = "REFNUM") %>%
   select(-REFNUM) %>%
   group_by(event_words) %>%                         
-  mutate(count = n()) %>% ##doing what i expect?
+  mutate(count = n()) %>% 
   summarise_all(mean) %>%
   filter(count > 50) %>% 
   select(-count) %>%
   ungroup %>% 
   as.data.frame
 
-## reformat data into matrix and take log of the event damages to help cluster the events 
+## reformat data into matrix and take log of the event damages 
 names <- tokens_summarised$event_words
 tokens_summarised$event_words <- NULL
 
@@ -146,29 +151,31 @@ row.names(tokens_summarised) <- names
 tokens_cluster <- tokens_summarised %>% dist %>% hclust
 ```
   
-The code above uses hierarchical clustering using the complete method. The `tokens_cluster` object will provide a tree/dendrogram for determining which event terms are more closely related. Here is a look at this tree:
+The code above uses hierarchical clustering using the "complete"" method. The `tokens_cluster` object will provide a tree/dendrogram for determining which event terms are more closely related. Here is a look at this tree:
 
 ```{r, fig.height=10, fig.cap="Figure 1: Dendrogram with 6 Colored Clusters"}
 ##plot (with help from https://cran.r-project.org/web/packages/dendextend/vignettes/FAQ.html)
 library(dendextend)
 library(RColorBrewer)
 
-clusters <- 6
+nclusters <- 6
 
 dendro <- tokens_cluster %>% 
   as.dendrogram %>% 
-  color_branches(k = clusters, col = brewer.pal(clusters, "Dark2")) %>% 
-  color_labels(k = clusters, col = brewer.pal(clusters, "Dark2")) 
+  color_branches(k = nclusters, col = brewer.pal(nclusters, "Dark2")) %>% 
+  color_labels(k = nclusters, col = brewer.pal(nclusters, "Dark2")) 
 
 plot(dendro, horiz = TRUE, main ="Event Term Clustering", xlab = "Distance")
 ```
 
-Figure 1 shows the tree produced by hierarchical clustering with 6 final clusters colored. These events will be grouped based upon their relative distances to one another (as determined by damages). Event terms that are close to each other on the right y-axis are more closely related to each other. The x-axis showing distance gives an idea of precisely how related the events are. Events that share a shorter distance are more closely related than those that share a farther distance. Finally, k clusters can be chosen by finding the distance at which there are k terminal nodes. In this case, I chose to create 6 clusters which are colored above.
+Figure 1 shows the tree produced by hierarchical clustering with 6 final clusters colored. While choosing 6 clusters was arbitrary (I could have chosen 4 or 10 clusters just as easily), the events that fall within those clusters represent terms that have the shortest relative distances to one another (as determined by damages). The clustering algorithm will systematically group events with the shortest relative distances until there are no groups left--moving from n groups to 1 group. In this case, I decided to cutoff the clustering once there were 6 clusters of events.
 
-Finally, these clusters are attached to the original data. It should be noted that breaking the terms apart has generated duplicated observations. This could be a problem since the results could be biased towards events that have more than one term. A more thorough analysis might explore reweighting these events or determining a process for choosing the most important word in a event.
+#Analysis of Severe Events
+
+Finally, these clusters can be attached to the original data to evaluate which cluster is the most severe. It should be noted that breaking the terms apart has generated duplicated observations. This could be a problem since the results could be biased towards severe events that have more than one term. A more thorough analysis might explore reweighting these events or determining a process for choosing the most important word in a event.
 
 ```{r}
-clusters <- cutree_1k.dendrogram(dendro, 6)
+clusters <- cutree_1k.dendrogram(dendro, nclusters)
 clusters <- tibble(Term = names(clusters), Cluster = clusters) %>%
   arrange(Cluster)
 
@@ -188,39 +195,45 @@ Which cluster has the worst consequences for population health?
 colors <- c("6" ="#1B9E77", "5" = "#D95F02", "4" = "#7570B3", "3" = "#E7298A", "2" = "#66A61E", "1" = "#E6AB02")
 
 storm_clusters %>% group_by(Cluster) %>% summarise(FATALITIES = mean(FATALITIES)) %>%
-  mutate(colors = cols,
+  mutate(colors = colors,
          Cluster = as.character(Cluster)) %>%
   ggplot(aes(Cluster, FATALITIES, fill = Cluster)) +
   geom_bar(stat = "identity") +
   scale_fill_manual(values = colors) + theme_bw() +
-  ylab("Fatalities")
+  ylab("Fatalities") +
+  ggtitle("Fatalities by Term Cluster")
 ```
 
-And here are the terms that fall 
+The 6th cluster appears to be the worst for fatalaties. Here are the terms associated with that cluster:
 
 ```{r}
 clusters %>% filter(Cluster == 6)
 ```
 
+
+## Economic Losses
+
+Which cluster has the worst economic consequences?
+
+
 ```{r}
 storm_clusters %>% group_by(Cluster) %>% summarise(PROPDMG = mean(PROPDMG)) %>%
-  mutate(colors = cols,
+  mutate(colors = colors,
          Cluster = as.character(Cluster)) %>%
   ggplot(aes(Cluster, log(PROPDMG), fill = Cluster)) +
   geom_bar(stat = "identity") +
   scale_fill_manual(values = colors) + theme_bw() +
-  ylab("Log of Property Damage")
+  ylab("Log of Property Damage") + 
+  ggtitle("Log of Property Damage by Term Cluster")
 ```
 
+Once again, cluster 6 appears to be the most severe event cluster. Here are the terms in that cluster once again:
 
+```{r}
+clusters %>% filter(Cluster == 6)
+```
 
-
-
---cluster econ
---cluster pop health
---add anyhting else to these--lat long?
-
---mapping for concentrated losses?
+It seems logical that there would be overlap between the events that cause extreme economic damage and events that pose a threat to population safety.
 
 ## Appendix
 
