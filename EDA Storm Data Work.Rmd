@@ -1,5 +1,5 @@
 ---
-title: 'Reproducible Research: Course Project 2'
+title: 'Evaluating Weather Damages by Clustering Weather Events'
 author: "John Goodwin"
 date: "May 14, 2018"
 output: html_document
@@ -9,19 +9,23 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE,warning = FALSE)
 ```
 
-# Data Processing
-
+#**Synopsis**
+    
+The following analysis will attempt to determine which weather events have the largest negative impact on population health and the economy. Using data from the National Weather Service ([which can be downloaded from this link](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2)), weather events will be grouped into clusters that produced similar damages and the clusters that cause the most damage will be evaluated. Since this data set involved human record keeping, weather events can go by a variety of names. For example, a wind event could go by "WIND", "WIND STORM", or "WINDY". As such, this analysis attempts to reduce redundancies created by human users and evaluate simplified event terms. These event terms will be clustered using hierarchical clustering to produce more homogeneous groups of events. Finally, these clusters can be compared to identify events that produce the greatest health and economic damages.
+  
+#**Data Processing**
+  
 Start by loading required packages.
-
+  
 ```{r}
 library(tidyverse)
 library(lubridate)
 ```
-
-##Read in Storm Data  
-
+  
+###Read in Storm Data  
+  
 Then download and read in the storm data if it isnt in your working directory.
-
+  
 ```{r}
 if(!file.exists("StormData.csv.bz2")) {
   download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", destfile = "StormData.csv.bz2")
@@ -29,11 +33,11 @@ if(!file.exists("StormData.csv.bz2")) {
 
 storm <- read_csv("StormData.csv.bz2")
 ```
-
-##Clean Date and Time Fields
-
+  
+###Clean Date and Time Fields
+  
 The date and time fields should be combined into one, tidy datetime field. This manipulation is actually not going to be used in the final analysis, but hey, [that way you have it](https://www.youtube.com/watch?v=dL8UXQ6BIrc).
-
+  
 ```{r}
 storm <- storm %>% 
   mutate(BGN_TIME = gsub('^([0-9]{2})([0-9]+)$', '\\1:\\2', BGN_TIME),
@@ -45,20 +49,21 @@ storm <- storm %>%
   select(-BGN_DATETIME1, -BGN_DATETIME2)
   
 ```
-
+  
 It looks like some dates/times still aren't parsing properly.
-
+  
 ```{r}
 storm %>% filter(is.na(BGN_DATETIME)) %>% 
-  select(BGN_DATE, BGN_TIME, BGN_DATETIME)
+  select(BGN_DATE, BGN_TIME, BGN_DATETIME) %>%
+  knitr::kable(.,format = "html")
 ```
-
+    
 Looks like some times weren't entered properly. To avoid making edits to individual rows, these will just be left as is.  
-
-##Clean Cost Fields
+    
+###Clean Cost Fields
   
 The damage costs fields need to be cleaned. It looks like the true severity of an event is contained in two columns where one field gives the magnitude of the damage (thousands, millions, and billions) and the other gives 3 significant digits. This code combines this information into one field.
-
+  
 ```{r}
 storm <- storm %>% 
   mutate(PROPDMG_factor = recode(PROPDMGEXP,
@@ -77,19 +82,21 @@ storm <- storm %>%
          CROPDMG = CROPDMG * CROPDMG_facotr) %>%
   select(-CROPDMG_facotr, -PROPDMG_factor)
 ```
-
-#Clustering Events
+  
+#**Clustering Events**
+  
 Before we can study which events have the worst economic and health consequences, it is worth attempting to group the event types (in the EVTYPE field) into clusters. There are `r length(unique(storm$EVTYPE))` unique events in this dataset, so it will be better to aggregate these events a bit. To start, look at the top ten most frequent events in the EVTYPE field:
-
+  
 ```{r}
 storm %>% group_by(EVTYPE) %>% 
   summarise(Frequency = n()/nrow(.)) %>% 
   arrange(desc(Frequency)) %>% top_n(20) %>%
   knitr::kable(.,format = "html")
 ```
-
+  
+  
 Note the similarities between some of the fields (hign wind vs. strong wind, etc.). I am going to try to reduce some of these redundancies using some functions that can be used for processing data in text mining ([I learned about most of this from here!](https://www.tidytextmining.com/index.html)). Basically, I am going to split up character strings like "HIGH WIND" to "HIGH" and "WIND". Afterwards, I am going to use the function `SnowballC::wordStem` to "stem" words. This means changing words like "WINDS" to "WIND". These manipulations should help reduce redundancies in the EVTYPE field.  
-
+  
 ```{r}
 library(tidytext)
 library(stringr)
@@ -104,17 +111,19 @@ tokens <- storm %>% select(REFNUM, EVTYPE) %>%
   unique                                                           #prevent dups
 
 ```
-
+  
 And what are the most frequent words now?
-
+  
 ```{r}
 obs <- nrow(storm)
 
 tokens %>% group_by(event_words) %>% summarise(Frequency =n()/obs) %>%
+  rename(`Event Terms` = event_words) %>%
   arrange(desc(Frequency)) %>% top_n(20) %>%
   knitr::kable(.,format = "html")
 ```
-
+  
+  
 Note the stemming algorithm does seem to make for some funky looking words. Notice the word "lightn" is likely the stemmed version of "lightning". It is still worth keeping the stemming to prevent words like "STORM" and "STORMS" from being seperated.
   
 Now that we have a simpler set of strings representing each event, let's try clustering these strings into groups that caused similar damage (for all sources of damage). While a more thorough analysis would attempt to use the full dataset to cluster the events, this analysis will cluster the events based on summarised results to speed things up. Since the clusters are going to be based on summarised results, I am only going to use words that appear more than 50 times to help ensure the results are credible.
@@ -152,8 +161,8 @@ tokens_cluster <- tokens_summarised %>% dist %>% hclust
 ```
   
 The code above uses hierarchical clustering using the "complete"" method. The `tokens_cluster` object will provide a tree/dendrogram for determining which event terms are more closely related. Here is a look at this tree:
-
-```{r, fig.height=10, fig.cap="Figure 1: Dendrogram with 6 Colored Clusters"}
+  
+```{r, fig.height=14, fig.cap="Figure 1: Dendrogram with 6 Clusters"}
 ##plot (with help from https://cran.r-project.org/web/packages/dendextend/vignettes/FAQ.html)
 library(dendextend)
 library(RColorBrewer)
@@ -165,15 +174,16 @@ dendro <- tokens_cluster %>%
   color_branches(k = nclusters, col = brewer.pal(nclusters, "Dark2")) %>% 
   color_labels(k = nclusters, col = brewer.pal(nclusters, "Dark2")) 
 
+par(mar = c(4,2,2,5))
 plot(dendro, horiz = TRUE, main ="Event Term Clustering", xlab = "Distance")
 ```
-
+  
 Figure 1 shows the tree produced by hierarchical clustering with 6 final clusters colored. While choosing 6 clusters was arbitrary (I could have chosen 4 or 10 clusters just as easily), the events that fall within those clusters represent terms that have the shortest relative distances to one another (as determined by damages). The clustering algorithm will systematically group events with the shortest relative distances until there are no groups left--moving from n groups to 1 group. In this case, I decided to cutoff the clustering once there were 6 clusters of events.
-
-#Analysis of Severe Events
-
+  
+#**Results**
+  
 Finally, these clusters can be attached to the original data to evaluate which cluster is the most severe. It should be noted that breaking the terms apart has generated duplicated observations. This could be a problem since the results could be biased towards severe events that have more than one term. A more thorough analysis might explore reweighting these events or determining a process for choosing the most important word in a event.
-
+  
 ```{r}
 clusters <- cutree_1k.dendrogram(dendro, nclusters)
 clusters <- tibble(Term = names(clusters), Cluster = clusters) %>%
@@ -184,13 +194,13 @@ storm_clusters <- tokens %>%
   left_join(clusters, by = c("event_words" = "Term")) %>%
   filter(!is.na(Cluster))
 ```
-
-
-## Population Health
-
+  
+  
+###Population Health
+  
 Which cluster has the worst consequences for population health?
-
-```{r}
+  
+```{r, fig.cap = "Figure 2: bar plot of fatalities by cluster"}
 #semi messy solution to coloring figures the same as above
 colors <- c("6" ="#1B9E77", "5" = "#D95F02", "4" = "#7570B3", "3" = "#E7298A", "2" = "#66A61E", "1" = "#E6AB02")
 
@@ -203,20 +213,19 @@ storm_clusters %>% group_by(Cluster) %>% summarise(FATALITIES = mean(FATALITIES)
   ylab("Fatalities") +
   ggtitle("Fatalities by Term Cluster")
 ```
-
-The 6th cluster appears to be the worst for fatalaties. Here are the terms associated with that cluster:
+  
+The event terms that fall within each cluster can be found in either the appendix or in the dendrogram above. The 6th cluster appears to be the worst for fatalities. The colors of each bar also correspond to the colors in the dendrogram. Here are the terms associated with the 6th cluster:
 
 ```{r}
-clusters %>% filter(Cluster == 6)
+clusters %>% filter(Cluster == 6) %>%
+  knitr::kable(.,format = "html")
 ```
-
-
-## Economic Losses
-
+  
+###Economic Losses
+  
 Which cluster has the worst economic consequences?
-
-
-```{r}
+  
+```{r, fig.cap = "Figure 3: Bar plot of log of property damage by cluster"}
 storm_clusters %>% group_by(Cluster) %>% summarise(PROPDMG = mean(PROPDMG)) %>%
   mutate(colors = colors,
          Cluster = as.character(Cluster)) %>%
@@ -226,18 +235,20 @@ storm_clusters %>% group_by(Cluster) %>% summarise(PROPDMG = mean(PROPDMG)) %>%
   ylab("Log of Property Damage") + 
   ggtitle("Log of Property Damage by Term Cluster")
 ```
-
-Once again, cluster 6 appears to be the most severe event cluster. Here are the terms in that cluster once again:
-
+  
+The event terms that fall within each cluster can be found in either the appendix or in the dendrogram above. Once again, cluster 6 appears to be the most severe event cluster. Here are the terms in that cluster once again:
+  
 ```{r}
-clusters %>% filter(Cluster == 6)
+clusters %>% filter(Cluster == 6) %>%
+  knitr::kable(.,format = "html")
 ```
-
+  
 It seems logical that there would be overlap between the events that cause extreme economic damage and events that pose a threat to population safety.
-
-## Appendix
-
+  
+#**Appendix**
+  
 Full list of terms clustered:
+  
 ```{r}
 clusters %>%
   knitr::kable(.,format = "html")
