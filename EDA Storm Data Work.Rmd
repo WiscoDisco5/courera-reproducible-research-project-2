@@ -200,7 +200,7 @@ storm_clusters <- tokens %>%
   
 Which cluster has the worst consequences for population health?
   
-```{r, fig.cap = "Figure 2: bar plot of fatalities by cluster"}
+```{r, fig.cap = "Figure 2: Bar plot of average fatalities by cluster"}
 #semi messy solution to coloring figures the same as above
 colors <- c("6" ="#1B9E77", "5" = "#D95F02", "4" = "#7570B3", "3" = "#E7298A", "2" = "#66A61E", "1" = "#E6AB02")
 
@@ -210,8 +210,8 @@ storm_clusters %>% group_by(Cluster) %>% summarise(FATALITIES = mean(FATALITIES)
   ggplot(aes(Cluster, FATALITIES, fill = Cluster)) +
   geom_bar(stat = "identity") +
   scale_fill_manual(values = colors) + theme_bw() +
-  ylab("Fatalities") +
-  ggtitle("Fatalities by Term Cluster")
+  ylab("Average Fatalities") +
+  ggtitle("Average Fatalities by Term Cluster")
 ```
   
 The event terms that fall within each cluster can be found in either the appendix or in the dendrogram above. The 6th cluster appears to be the worst for fatalities. The colors of each bar also correspond to the colors in the dendrogram. Here are the terms associated with the 6th cluster:
@@ -221,19 +221,21 @@ clusters %>% filter(Cluster == 6) %>%
   knitr::kable(.,format = "html")
 ```
   
+It would appear that events associated with these terms have the worst health outcomes on average.
+  
 ###Economic Losses
   
 Which cluster has the worst economic consequences?
   
-```{r, fig.cap = "Figure 3: Bar plot of log of property damage by cluster"}
+```{r, fig.cap = "Figure 3: Bar plot of average log of property damage by cluster"}
 storm_clusters %>% group_by(Cluster) %>% summarise(PROPDMG = mean(PROPDMG)) %>%
   mutate(colors = colors,
          Cluster = as.character(Cluster)) %>%
   ggplot(aes(Cluster, log(PROPDMG), fill = Cluster)) +
   geom_bar(stat = "identity") +
   scale_fill_manual(values = colors) + theme_bw() +
-  ylab("Log of Property Damage") + 
-  ggtitle("Log of Property Damage by Term Cluster")
+  ylab("Average Log of Property Damage") + 
+  ggtitle("Average of Log of Property Damage by Term Cluster")
 ```
   
 The event terms that fall within each cluster can be found in either the appendix or in the dendrogram above. Once again, cluster 6 appears to be the most severe event cluster. Here are the terms in that cluster once again:
@@ -243,7 +245,7 @@ clusters %>% filter(Cluster == 6) %>%
   knitr::kable(.,format = "html")
 ```
   
-It seems logical that there would be overlap between the events that cause extreme economic damage and events that pose a threat to population safety.
+It seems logical that there would be overlap between the events that cause extreme economic damage and events that pose a threat to population health.
   
 #**Appendix**
   
